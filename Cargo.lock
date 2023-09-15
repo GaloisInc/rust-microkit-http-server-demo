@@ -1372,6 +1372,7 @@ dependencies = [
  "sel4cp-http-server-example-virtio-hal-impl",
  "sel4cp-http-server-example-virtio-net-driver-interface-types",
  "sel4cp-message",
+ "smoltcp",
  "virtio-drivers",
 ]
 
