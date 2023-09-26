@@ -13,13 +13,13 @@ use virtio_drivers::{
     },
 };
 
-use sel4cp::{memory_region_symbol, protection_domain, var, Channel, Handler, MessageInfo};
-use sel4cp_message::MessageInfoExt as _;
-
 use sel4_externally_shared::ExternallySharedRef;
-use sel4_shared_ring_buffer::{RingBuffers, RingBuffer};
-use sel4cp_http_server_example_virtio_hal_impl::HalImpl;
-use sel4cp_http_server_example_virtio_net_driver_interface_types::*;
+use sel4_microkit::{memory_region_symbol, protection_domain, var, Channel, Handler, MessageInfo};
+use sel4_microkit_message::MessageInfoExt as _;
+use sel4_shared_ring_buffer::{RingBuffer, RingBuffers};
+
+use microkit_http_server_example_virtio_hal_impl::HalImpl;
+use microkit_http_server_example_virtio_net_driver_interface_types::*;
 
 use smoltcp::phy::{self, RxToken, TxToken};
 use smoltcp::time::Instant;
