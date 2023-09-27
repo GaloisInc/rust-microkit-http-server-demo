@@ -6,4 +6,9 @@ edition = "2021"
 license = "BSD-2-Clause"
 
 [dependencies]
+sel4-externally-shared = { git = "https://github.com/seL4/rust-sel4", features = ["unstable"] }
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", default-features = false }
+sel4-microkit-message = { git = "https://github.com/seL4/rust-sel4" }
+sel4-shared-ring-buffer = { git = "https://github.com/seL4/rust-sel4" }
 serde = { version = "1.0.147", default-features = false }
+smoltcp = { version = "0.10.0", default-features = false, features = ["proto-ipv4","medium-ethernet","socket-raw"] }

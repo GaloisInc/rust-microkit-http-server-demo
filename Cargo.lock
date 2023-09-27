@@ -746,7 +746,12 @@ dependencies = [
 name = "microkit-http-server-example-virtio-net-driver-interface-types"
 version = "0.1.0"
 dependencies = [
+ "sel4-externally-shared",
+ "sel4-microkit",
+ "sel4-microkit-message",
+ "sel4-shared-ring-buffer",
  "serde",
+ "smoltcp",
 ]
 
 [[package]]

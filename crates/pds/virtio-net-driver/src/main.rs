@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(never_type)]
-#![feature(let_chains)]
 
 use core::ptr::NonNull;
 
@@ -14,15 +13,11 @@ use virtio_drivers::{
 };
 
 use sel4_externally_shared::ExternallySharedRef;
-use sel4_microkit::{memory_region_symbol, protection_domain, var, Channel, Handler, MessageInfo};
-use sel4_microkit_message::MessageInfoExt as _;
+use sel4_microkit::{memory_region_symbol, protection_domain, var, Channel};
 use sel4_shared_ring_buffer::{RingBuffer, RingBuffers};
 
 use microkit_http_server_example_virtio_hal_impl::HalImpl;
 use microkit_http_server_example_virtio_net_driver_interface_types::*;
-
-use smoltcp::phy::{self, RxToken, TxToken};
-use smoltcp::time::Instant;
 
 const DEVICE: Channel = Channel::new(0);
 const CLIENT: Channel = Channel::new(1);
@@ -89,11 +84,13 @@ fn init() -> PhyDeviceHandler<virtio_phy::Device> {
         client_region_paddr,
         rx_ring_buffers,
         tx_ring_buffers,
+        DEVICE,
+        CLIENT,
     )
 }
 
 mod virtio_phy {
-    use super::*;
+    use super::{HalImpl, MmioTransport, NET_QUEUE_SIZE, IrqAck, HasMac};
 
     extern crate alloc;
     use alloc::rc::Rc;
@@ -124,7 +121,7 @@ mod virtio_phy {
 
     impl Drop for RxToken {
         fn drop(&mut self) {
-            self.dev_inner.borrow_mut().recycle_rx_buffer(self.buf.take().unwrap());
+            let _ = self.dev_inner.borrow_mut().recycle_rx_buffer(self.buf.take().unwrap());
         }
     }
 
@@ -217,139 +214,9 @@ mod virtio_phy {
     }
 }
 
-pub trait IrqAck {
-    fn irq_ack(&mut self);
-}
-
-pub trait HasMac {
-    fn mac_address(&self) -> [u8; 6];
-}
-
 // XXX How do we attach this to a a token in another module. Notice, no self
 // argument...
 fn notify_client() -> Result<(), !> {
     CLIENT.notify();
     Ok::<_, !>(())
-}
-
-struct PhyDeviceHandler<Device> {
-    dev: Device,
-    client_region: ExternallySharedRef<'static, [u8]>,
-    client_region_paddr: usize,
-    rx_ring_buffers: RingBuffers<'static, fn() -> Result<(), !>>,
-    tx_ring_buffers: RingBuffers<'static, fn() -> Result<(), !>>,
-}
-
-impl<Device> PhyDeviceHandler<Device> {
-    pub fn new(
-        dev: Device,
-        client_region: ExternallySharedRef<'static, [u8]>,
-        client_region_paddr: usize,
-        rx_ring_buffers: RingBuffers<'static, fn() -> Result<(), !>>,
-        tx_ring_buffers: RingBuffers<'static, fn() -> Result<(), !>>,
-    ) -> Self {
-        // XXX We could maybe initialize DMA here, so we don't need to do
-        // it in main. Also maybe initialize the ring buffers.
-        Self {
-            dev,
-            client_region,
-            client_region_paddr,
-            rx_ring_buffers,
-            tx_ring_buffers,
-        }
-    }
-}
-
-impl<Device: phy::Device + IrqAck + HasMac> Handler for PhyDeviceHandler<Device> {
-    type Error = !;
-
-    fn notified(&mut self, channel: Channel) -> Result<(), Self::Error> {
-        match channel {
-            DEVICE | CLIENT => {
-                let mut notify_rx = false;
-
-                while !self.rx_ring_buffers.free().is_empty()
-                    && let Some((rx_tok, _tx_tok)) = self.dev.receive(Instant::ZERO) {
-                        let desc = self.rx_ring_buffers.free_mut().dequeue().unwrap();
-                        let desc_len = usize::try_from(desc.len()).unwrap();
-
-                        rx_tok.consume(|rx_buf| {
-                            assert!(desc_len >= rx_buf.len());
-                            let buf_range = {
-                                let start = desc.encoded_addr() - self.client_region_paddr;
-                                start..start + rx_buf.len()
-                            };
-                            self.client_region
-                                .as_mut_ptr()
-                                .index(buf_range)
-                                .copy_from_slice(&rx_buf);
-                        });
-
-                        self.rx_ring_buffers.used_mut().enqueue(desc).unwrap();
-                        notify_rx = true;
-                    }
-
-                if notify_rx {
-                    self.rx_ring_buffers.notify().unwrap();
-                }
-
-                let mut notify_tx = false;
-
-                while !self.tx_ring_buffers.free().is_empty()
-                    && let Some(tx_tok) = self.dev.transmit(Instant::ZERO) {
-                        let desc = self.tx_ring_buffers.free_mut().dequeue().unwrap();
-                        let tx_len = usize::try_from(desc.len()).unwrap();
-
-                        tx_tok.consume(tx_len, |tx_buf| {
-                            let buf_range = {
-                                let start = desc.encoded_addr() - self.client_region_paddr;
-                                start..start + tx_len
-                            };
-                            self.client_region
-                                .as_ptr()
-                                .index(buf_range)
-                                .copy_into_slice(tx_buf);
-                        });
-
-                        self.tx_ring_buffers.used_mut().enqueue(desc).unwrap();
-                        notify_tx = true;
-                    }
-
-                if notify_tx {
-                    self.tx_ring_buffers.notify().unwrap();
-                }
-
-                self.dev.irq_ack();
-                DEVICE.irq_ack().unwrap();
-            }
-            _ => {
-                unreachable!()
-            }
-        }
-        Ok(())
-    }
-
-    fn protected(
-        &mut self,
-        channel: Channel,
-        msg_info: MessageInfo,
-    ) -> Result<MessageInfo, Self::Error> {
-        Ok(match channel {
-            CLIENT => match msg_info.recv_using_postcard::<Request>() {
-                Ok(req) => match req {
-                    Request::GetMacAddress => {
-                        let mac_address = self.dev.mac_address();
-                        MessageInfo::send_using_postcard(GetMacAddressResponse {
-                            mac_address: MacAddress(mac_address),
-                        })
-                        .unwrap()
-                    }
-                },
-                Err(_) => MessageInfo::send_unspecified_error(),
-            },
-            _ => {
-                unreachable!()
-            }
-        })
-    }
 }
